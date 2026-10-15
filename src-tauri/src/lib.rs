@@ -874,6 +874,11 @@ async fn apply_update(app: tauri::AppHandle, target: String) -> Result<String, S
     // The staged install (npm + file I/O + atomic swap) must run off the main
     // thread or it freezes the whole popover until the update finishes.
     tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _guard = state.lifecycle.lock().unwrap();
+        if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+            return Err("Server updates are disabled in tray-only mode".into());
+        }
         let prefix = Prefix::new(&paths.prefix_root);
         let node = NodeRuntime::new(&node_root);
 
