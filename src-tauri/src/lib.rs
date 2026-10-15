@@ -147,7 +147,7 @@ fn restart_flow(app: tauri::AppHandle) {
     if let Some(mut sup) = taken {
         sup.stop_and_wait();
     }
-    bootstrap(app);
+    bootstrap(app.clone());
 }
 
 fn install_with_retry(
