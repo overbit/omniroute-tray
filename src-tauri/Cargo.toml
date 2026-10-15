@@ -1,6 +1,6 @@
 [package]
 name = "omniroute-tray"
-version = "0.1.22"
+version = "0.1.23"
 description = "A cross-platform tray app that supervises, monitors, and auto-updates the OmniRoute AI router."
 authors = ["OmniRouteTray contributors"]
 license = "MIT"
@@ -34,6 +34,7 @@ chrono = "0.4"
 hmac = "0.13"
 sha2 = "0.11"
 hex = "0.4"
+url = "2"
 
 # Popover space-following (see src/spaces.rs). Already in the tree via tao.
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -18,6 +18,7 @@ const STATE_LABELS = {
 };
 
 let lastStatus = null;
+let connectionSettings = { mode: "managed", server_url: "http://127.0.0.1:20128", key_configured: false };
 let showUsed = localStorage.getItem("quotaMode") === "used";
 let showInactiveProviders =
   localStorage.getItem("showInactiveProviders") === "true";
@@ -199,12 +200,12 @@ function renderHeader(status) {
     errEl.innerHTML = `
       <p class="error">${reason}</p>
       <div class="error-actions">
-        <button id="restart-btn" class="err-btn">Restart Server</button>
+        <button id="restart-btn" class="err-btn">${connectionSettings.mode === "tray-only" ? "Reconnect" : "Restart Server"}</button>
         <button id="logs-link-btn" class="err-btn ghost">View Logs</button>
       </div>`;
     document.getElementById("restart-btn").onclick = async (e) => {
       e.target.disabled = true;
-      e.target.textContent = "Restarting…";
+      e.target.textContent = connectionSettings.mode === "tray-only" ? "Connecting…" : "Restarting…";
       try {
         await invoke("restart_server");
       } catch {}
@@ -1019,7 +1020,7 @@ function paintCost() {
   if (!result) {
     body = costSkeleton();
   } else if (result.status === "needs-api-key") {
-    body = `<a class="connect" href="http://127.0.0.1:20128" target="_blank">Connect API key →</a>`;
+    body = `<a class="connect" href="${escapeHtml(connectionSettings.mode === "tray-only" ? connectionSettings.server_url : "http://127.0.0.1:20128")}" target="_blank">Connect API key →</a>`;
   } else if (!result.rows?.length) {
     body = `<div class="cost-empty">No spend in this range.</div>`;
   } else {
@@ -1147,6 +1148,9 @@ async function renderSettings({ automatic = false } = {}) {
   const content = document.getElementById("content");
   let autostart = false;
   try {
+    connectionSettings = await invoke("get_connection_settings");
+  } catch {}
+  try {
     autostart = await invoke("get_autostart");
   } catch {}
   // Background callers make this reachable at any time, and the user may have left
@@ -1196,6 +1200,27 @@ async function renderSettings({ automatic = false } = {}) {
       <span class="settings-title">Settings</span>
     </div>
     <div class="section">
+      <h3>Server connection</h3>
+      <label class="set-field"><span>Mode</span>
+        <select id="connection-mode" class="mode-select">
+          <option value="managed" ${connectionSettings.mode === "managed" ? "selected" : ""}>Manage local server</option>
+          <option value="tray-only" ${connectionSettings.mode === "tray-only" ? "selected" : ""}>Tray only (existing server)</option>
+        </select>
+      </label>
+      <div id="remote-settings" ${connectionSettings.mode === "tray-only" ? "" : "hidden"}>
+        <label class="set-field"><span>Server URL</span>
+          <input id="server-url" type="url" spellcheck="false" value="${escapeHtml(connectionSettings.server_url)}" placeholder="https://router.example.com" />
+        </label>
+        <label class="set-field"><span>API key</span>
+          <input id="server-api-key" type="password" autocomplete="off" placeholder="${connectionSettings.key_configured ? "Saved key (leave blank to keep)" : "Management API key"}" />
+        </label>
+        <label class="set-toggle"><input id="clear-api-key" type="checkbox" />
+          <span>Clear stored API key</span></label>
+        <p class="section-note">Use a management-scoped key. The server is never started or stopped in tray-only mode.</p>
+      </div>
+      <div class="set-save-row"><button id="save-connection" class="err-btn">Save connection</button><span id="connection-feedback" role="status"></span></div>
+    </div>
+    <div class="section">
       <h3>Start on Login</h3>
       <label class="set-toggle">
         <input type="checkbox" id="autostart-check" ${autostart ? "checked" : ""} />
@@ -1229,6 +1254,36 @@ async function renderSettings({ automatic = false } = {}) {
     </div>`;
 
   document.getElementById("back-btn").onclick = toggleSettings;
+  const connectionMode = document.getElementById("connection-mode");
+  const remoteSettings = document.getElementById("remote-settings");
+  connectionMode.onchange = () => { remoteSettings.hidden = connectionMode.value !== "tray-only"; fitWindow(); };
+  document.getElementById("save-connection").onclick = async () => {
+    const save = document.getElementById("save-connection");
+    const feedback = document.getElementById("connection-feedback");
+    const url = connectionMode.value === "managed"
+      ? connectionSettings.server_url
+      : document.getElementById("server-url").value;
+    const enteredKey = document.getElementById("server-api-key").value;
+    const clearKey = document.getElementById("clear-api-key").checked;
+    const apiKey = clearKey ? "" : enteredKey || null;
+    save.disabled = true;
+    feedback.textContent = "Saving…";
+    try {
+      connectionSettings = await invoke("set_connection_settings", {
+        mode: connectionMode.value,
+        serverUrl: url,
+        apiKey,
+      });
+      feedback.textContent = "Saved";
+      if (connectionSettings.mode === "tray-only") {
+        document.getElementById("server-api-key").value = "";
+      }
+      await renderSettings();
+    } catch (err) {
+      feedback.textContent = String(err);
+      save.disabled = false;
+    }
+  };
 
   const auto = document.getElementById("autostart-check");
   if (auto) {
@@ -1294,10 +1349,12 @@ async function renderVersion() {
       invoke("get_app_version"),
       invoke("get_port"),
     ]);
-    el.innerHTML = `<span class="app-name">OmniRouteTray ${version}</span><button class="port-link" id="port-link" title="Open OmniRoute dashboard">:${port}</button>`;
+    const target = connectionSettings.mode === "tray-only" ? connectionSettings.server_url : `http://127.0.0.1:${port}`;
+    el.innerHTML = `<span class="app-name">OmniRouteTray ${version}</span><button class="port-link" id="port-link" title="Open OmniRoute dashboard">${connectionSettings.mode === "tray-only" ? "Remote ↗" : `:${port}`}</button>`;
+
     el.dataset.ready = "1";
     document.getElementById("port-link")?.addEventListener("click", () => {
-      invoke("open_url", { url: `http://127.0.0.1:${port}` }).catch(() => {});
+      invoke("open_url", { url: target }).catch(() => {});
     });
     renderTrayUpdate();
   } catch {}
@@ -1452,6 +1509,18 @@ function fitWindow() {
 }
 
 getCurrentWindow().listen("run-doctor", runDoctor);
+getCurrentWindow().listen("connection-changed", async () => {
+  connectionSettings = await invoke("get_connection_settings");
+  rateLimitCache = [];
+  rateLimitsLoaded = false;
+  costCache = null;
+  remoteIcons.clear();
+  accountsEpoch += 1;
+  document.getElementById("app-version").removeAttribute("data-ready");
+  if (inSettings) await renderSettings();
+  else await refresh();
+  renderVersion();
+});
 
 getCurrentWindow().listen("quota-refreshed", (event) => {
   if (Array.isArray(event.payload)) {
@@ -1520,4 +1589,12 @@ if (appEl && "ResizeObserver" in window) {
   new ResizeObserver(() => fitWindow()).observe(appEl);
 }
 
+invoke("get_connection_settings").then((settings) => {
+  connectionSettings = settings;
+  const version = document.getElementById("app-version");
+  if (version) {
+    version.removeAttribute("data-ready");
+    renderVersion();
+  }
+}).catch(() => {});
 loop();

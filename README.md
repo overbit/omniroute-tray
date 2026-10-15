@@ -36,6 +36,16 @@ xattr -dr com.apple.quarantine /Applications/OmniRouteTray.app
 
 Or right-click the app → **Open** → **Open**.
 
+## Tray-only mode (connect to an existing server)
+
+By default OmniRouteTray manages a local OmniRoute server. To run **only the tray UI**, open **Settings → Server connection**, choose **Tray only (existing server)**, enter the server's HTTP(S) URL and a management-scoped API key, then click **Save connection**.
+
+- Tray-only mode does **not** install, start, restart, stop or update OmniRoute. You must run and manage the server separately.
+- The URL may include a reverse-proxy path, such as `https://router.example.com/omniroute`. Use HTTPS for remotely hosted servers so your API key is encrypted in transit.
+- Your API key is stored in the tray's private app-data settings file (`connection.json`), not returned to the UI. Leave the key input empty to keep the saved key or check **Clear stored API key** to delete it.
+- The status strip, per-account limits and usage trend use the configured server's HTTP API. CLI-based cost breakdown is available only in managed mode. The remote server must accept a Bearer key with **management** scope for account and usage endpoints.
+- Change the mode back to **Manage local server** to resume the original bundled-server lifecycle. Switching from managed mode stops only a server the tray owns; it never stops a separately managed server.
+
 ## How it works
 
 - On first launch the app installs OmniRoute into `~/Library/Application Support/dev.omniroute.tray/omniroute-prefix/` using its bundled Node runtime. This requires a network connection on first launch only.
