@@ -81,6 +81,17 @@ pub fn diagnose(
     DoctorReport { healthy, checks }
 }
 
+pub fn remote_report(url: &str, healthy: bool) -> DoctorReport {
+    DoctorReport {
+        healthy,
+        checks: vec![Check::new(
+            "Remote server",
+            if healthy { CheckStatus::Ok } else { CheckStatus::Fail },
+            url,
+        )],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
