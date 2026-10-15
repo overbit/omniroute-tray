@@ -817,6 +817,10 @@ fn run_doctor(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<doctor::DoctorReport, String> {
+    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        let config = state.connection.lock().unwrap().clone();
+        return Ok(doctor::remote_report(&config.server_url, probe_remote(&config.server_url).is_some()));
+    }
     let paths = AppPaths::resolve(&app).map_err(|e| e.to_string())?;
     let active = state.active_version.lock().unwrap().clone();
     Ok(doctor::diagnose(
@@ -829,6 +833,9 @@ fn run_doctor(
 
 #[tauri::command]
 async fn apply_update(app: tauri::AppHandle, target: String) -> Result<String, String> {
+    if app.state::<AppState>().connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        return Err("Server updates are disabled in tray-only mode".into());
+    }
     use installer::NodeRuntime;
     use runtime::Prefix;
 
@@ -1017,7 +1024,7 @@ pub fn run() {
                     }
                     "dashboard" => {
                         let _ =
-                            tauri_plugin_opener::open_url("http://127.0.0.1:20128", None::<&str>);
+                            tauri_plugin_opener::open_url(&app.state::<AppState>().connection.lock().unwrap().server_url_for_use(), None::<&str>);
                     }
                     "restart" => {
                         let handle = app.clone();
@@ -1055,7 +1062,23 @@ pub fn run() {
                 .build(app)?;
 
             let handle = app.handle().clone();
-            std::thread::spawn(move || bootstrap(handle));
+            let loaded = connection_path(&handle).and_then(|p| ConnectionConfig::load(&p));
+            match loaded {
+                Ok(config) => *app.state::<AppState>().connection.lock().unwrap() = config,
+                Err(error) => {
+                    *app.state::<AppState>().connection.lock().unwrap() = ConnectionConfig {
+                        mode: ConnectionMode::TrayOnly, ..ConnectionConfig::default()
+                    };
+                    set_state(&handle, ServerState::Error { reason: error });
+                }
+            }
+            if !matches!(*app.state::<AppState>().server.lock().unwrap(), ServerState::Error { .. }) {
+                std::thread::spawn(move || {
+                    let state = handle.state::<AppState>();
+                    let _guard = state.lifecycle.lock().unwrap();
+                    bootstrap(handle.clone());
+                });
+            }
             monitor_health(app.handle().clone());
             schedule_update_checks(app.handle().clone());
             schedule_quota_refresh(app.handle().clone());
@@ -1091,6 +1114,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
+            get_connection_settings,
+            set_connection_settings,
             get_quota,
             get_cost,
             get_rate_limits,
