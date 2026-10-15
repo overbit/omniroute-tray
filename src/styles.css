@@ -889,6 +889,13 @@ body {
   cursor: pointer;
 }
 
+.set-field { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; font-size: 11px; color: var(--text-muted); }
+.set-field input, .set-field select { width: 100%; box-sizing: border-box; background: var(--bg-subtle); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px; font: inherit; font-size: 12px; }
+.set-field input:focus, .set-field select:focus { outline: 1px solid var(--accent); }
+.set-save-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+#connection-feedback { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+#remote-settings[hidden] { display: none; }
+
 .set-list {
   list-style: none;
   display: flex;
