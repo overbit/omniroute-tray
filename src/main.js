@@ -1589,5 +1589,12 @@ if (appEl && "ResizeObserver" in window) {
   new ResizeObserver(() => fitWindow()).observe(appEl);
 }
 
-invoke("get_connection_settings").then((settings) => { connectionSettings = settings; }).catch(() => {});
+invoke("get_connection_settings").then((settings) => {
+  connectionSettings = settings;
+  const version = document.getElementById("app-version");
+  if (version) {
+    version.removeAttribute("data-ready");
+    renderVersion();
+  }
+}).catch(() => {});
 loop();
