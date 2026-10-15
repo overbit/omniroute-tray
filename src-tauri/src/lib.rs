@@ -1,5 +1,6 @@
 mod analytics;
 mod apikey;
+mod connection;
 mod data;
 mod doctor;
 mod engine_gate;
@@ -27,16 +28,19 @@ use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 
+use connection::{ConnectionConfig, ConnectionMode, ConnectionSettings, DEFAULT_SERVER_URL};
 use data::{CostResult, DataClient, QuotaRow};
 use omniauth::Credentials;
 use paths::AppPaths;
 use state::ServerState;
 
 const POPOVER_LABEL: &str = "popover";
-const SERVER_URL: &str = "http://127.0.0.1:20128";
+
 
 struct AppState {
     server: Mutex<ServerState>,
+    connection: Mutex<ConnectionConfig>,
+    lifecycle: Mutex<()>,
     data: Mutex<Option<DataClient>>,
     active_version: Mutex<Option<String>>,
     /// The version the server on the port *reports* (`/api/monitoring/health`),
@@ -83,6 +87,8 @@ impl AppState {
     fn new() -> Self {
         Self {
             server: Mutex::new(ServerState::Stopped),
+            connection: Mutex::new(ConnectionConfig::default()),
+            lifecycle: Mutex::new(()),
             data: Mutex::new(None),
             active_version: Mutex::new(None),
             served_version: Mutex::new(None),
@@ -130,6 +136,12 @@ fn restart_managed_server(app: &tauri::AppHandle, version: &str) -> bool {
 /// Stop the running server and wait for the port to actually free, then bootstrap
 /// a fresh one. MUST run off the UI thread — `stop_and_wait` blocks.
 fn restart_flow(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let _guard = state.lifecycle.lock().unwrap();
+    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        refresh_remote_status(&app);
+        return;
+    }
     set_state(&app, ServerState::Starting);
     let taken = app.state::<AppState>().supervisor.lock().unwrap().take();
     if let Some(mut sup) = taken {
@@ -158,6 +170,10 @@ fn install_with_retry(
 }
 
 fn bootstrap(app: tauri::AppHandle) {
+    if app.state::<AppState>().connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        refresh_remote_status(&app);
+        return;
+    }
     use installer::NodeRuntime;
     use runtime::Prefix;
     use supervisor::Supervisor;
@@ -284,7 +300,12 @@ fn monitor_health(app: tauri::AppHandle) {
         let mut consecutive_failures: u32 = 0;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
-            let probe = supervisor::probe_health(20128);
+            let connection = app.state::<AppState>().connection.lock().unwrap().clone();
+            let probe = if connection.mode == ConnectionMode::TrayOnly {
+                probe_remote(&connection.server_url)
+            } else {
+                supervisor::probe_health(20128)
+            };
             let responding = probe.is_some();
             let app_state = app.state::<AppState>();
             if let Some(served) = probe.and_then(|p| p.version) {
@@ -311,7 +332,11 @@ fn monitor_health(app: tauri::AppHandle) {
                     set_state(
                         &app,
                         ServerState::Error {
-                            reason: "OmniRoute server is not responding on :20128".into(),
+                            reason: if connection.mode == ConnectionMode::TrayOnly {
+                                format!("Remote OmniRoute is not responding at {}", connection.server_url)
+                            } else {
+                                "OmniRoute server is not responding on :20128".into()
+                            },
                         },
                     );
                 }
@@ -325,8 +350,8 @@ fn monitor_health(app: tauri::AppHandle) {
                     // bootstrap() only runs check_for_update when wait_ready succeeds
                     // within 20s. A slow cold start lands in Error, recovers here, and
                     // would otherwise never learn about a pending update.
-                    if let Some(version) = &version {
-                        check_for_update(&app, version);
+                    if connection.mode == ConnectionMode::Managed {
+                        if let Some(version) = &version { check_for_update(&app, version); }
                     }
                 }
                 _ => {}
@@ -365,6 +390,7 @@ fn schedule_update_checks(app: tauri::AppHandle) {
         std::thread::sleep(UPDATE_CHECK_INTERVAL);
         let app_state = app.state::<AppState>();
         // Only nudge steady states; never clobber Starting/Updating/Error.
+        if app_state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly { continue; }
         let can_check = matches!(
             *app_state.server.lock().unwrap(),
             ServerState::Running { .. } | ServerState::UpdateAvailable { .. }
@@ -397,11 +423,11 @@ fn schedule_quota_refresh(app: tauri::AppHandle) {
         if !server_live {
             continue;
         }
-        let creds = credentials_for_request(&app);
+        let (url, creds) = connection_for_request(&app);
         if creds.is_empty() {
             continue;
         }
-        let Ok(mut limits) = ratelimits::fetch(SERVER_URL, &creds, &app_state.usage_probes) else {
+        let Ok(mut limits) = ratelimits::fetch(&url, &creds, &app_state.usage_probes) else {
             continue;
         };
         {
