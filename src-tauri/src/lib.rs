@@ -344,14 +344,20 @@ fn monitor_health(app: tauri::AppHandle) {
                     set_state(
                         &app,
                         ServerState::Running {
-                            version: version.clone(),
+                            version: if connection.mode == ConnectionMode::TrayOnly {
+                                app_state.served_version.lock().unwrap().clone()
+                            } else {
+                                version.clone()
+                            },
                         },
                     );
                     // bootstrap() only runs check_for_update when wait_ready succeeds
                     // within 20s. A slow cold start lands in Error, recovers here, and
                     // would otherwise never learn about a pending update.
                     if connection.mode == ConnectionMode::Managed {
-                        if let Some(version) = &version { check_for_update(&app, version); }
+                        if let Some(version) = &version {
+                            check_for_update(&app, version);
+                        }
                     }
                 }
                 _ => {}
@@ -390,7 +396,9 @@ fn schedule_update_checks(app: tauri::AppHandle) {
         std::thread::sleep(UPDATE_CHECK_INTERVAL);
         let app_state = app.state::<AppState>();
         // Only nudge steady states; never clobber Starting/Updating/Error.
-        if app_state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly { continue; }
+        if app_state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+            continue;
+        }
         let can_check = matches!(
             *app_state.server.lock().unwrap(),
             ServerState::Running { .. } | ServerState::UpdateAvailable { .. }
@@ -650,7 +658,11 @@ fn get_app_version() -> String {
 
 #[tauri::command]
 fn get_port(state: tauri::State<AppState>) -> u16 {
-    if state.connection.lock().unwrap().mode == ConnectionMode::Managed { 20128 } else { 0 }
+    if state.connection.lock().unwrap().mode == ConnectionMode::Managed {
+        20128
+    } else {
+        0
+    }
 }
 
 #[tauri::command]
@@ -670,7 +682,9 @@ fn open_logs(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_quota(state: tauri::State<'_, AppState>) -> Result<Vec<QuotaRow>, String> {
-    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly { return Ok(Vec::new()); }
+    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        return Ok(Vec::new());
+    }
     let client = state.data.lock().unwrap().clone();
     let Some(client) = client else {
         return Ok(Vec::new());
@@ -683,7 +697,9 @@ async fn get_quota(state: tauri::State<'_, AppState>) -> Result<Vec<QuotaRow>, S
 
 #[tauri::command]
 async fn get_cost(state: tauri::State<'_, AppState>, range: String) -> Result<CostResult, String> {
-    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly { return Ok(CostResult::unavailable()); }
+    if state.connection.lock().unwrap().mode == ConnectionMode::TrayOnly {
+        return Ok(CostResult::unavailable());
+    }
     let client = state.data.lock().unwrap().clone();
     let Some(client) = client else {
         return Ok(CostResult::unavailable());
@@ -988,7 +1004,7 @@ pub fn run() {
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
             let dashboard = MenuItemBuilder::with_id("dashboard", "Open Dashboard").build(app)?;
-            let restart = MenuItemBuilder::with_id("restart", "Restart Server").build(app)?;
+            let restart = MenuItemBuilder::with_id("restart", "Restart / Reconnect").build(app)?;
             let doctor = MenuItemBuilder::with_id("doctor", "Run Doctor").build(app)?;
             let logs = MenuItemBuilder::with_id("logs", "View Logs").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
